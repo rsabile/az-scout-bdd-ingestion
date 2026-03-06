@@ -121,6 +121,11 @@ class AzurePricingCollector(BaseCollector):
             if not filters:
                 return params
 
+            # currencyCode is a top-level query parameter, not an OData $filter field
+            if "currencyCode" in filters:
+                params["currencyCode"] = str(filters.pop("currencyCode"))
+                self.logger.info("Using currencyCode: %s", params["currencyCode"])
+
             parts: list[str] = []
             for key, value in filters.items():
                 if isinstance(value, str):
