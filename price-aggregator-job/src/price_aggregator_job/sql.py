@@ -38,7 +38,7 @@ CREATE INDEX IF NOT EXISTS idx_price_summary_type
 # Each query INSERT ... SELECT pre-computed stats into price_summary.
 # Uses PERCENTILE_CONT() WITHIN GROUP for percentiles (PostgreSQL aggregate).
 
-AGGREGATE_RETAIL_BY_CATEGORY = """\
+AGGREGATE_RETAIL = """\
 INSERT INTO price_summary (
     run_id, snapshot_utc, region, category, price_type, currency_code,
     avg_price, median_price, min_price, max_price,
@@ -65,40 +65,13 @@ JOIN vm_sku_catalog c ON r.arm_sku_name = c.sku_name
 WHERE r.pricing_type  = 'Consumption'
   AND r.sku_name NOT LIKE '%% Spot%%'
   AND r.unit_price > 0
-GROUP BY r.arm_region_name, c.category, r.currency_code;
+GROUP BY GROUPING SETS (
+    (r.arm_region_name, c.category, r.currency_code),
+    (r.arm_region_name, r.currency_code)
+);
 """
 
-AGGREGATE_RETAIL_GLOBAL = """\
-INSERT INTO price_summary (
-    run_id, snapshot_utc, region, category, price_type, currency_code,
-    avg_price, median_price, min_price, max_price,
-    p10_price, p25_price, p75_price, p90_price, sku_count
-)
-SELECT
-    %(run_id)s,
-    NOW(),
-    r.arm_region_name,
-    NULL,
-    'retail',
-    r.currency_code,
-    AVG(r.unit_price),
-    PERCENTILE_CONT(0.5)  WITHIN GROUP (ORDER BY r.unit_price),
-    MIN(r.unit_price),
-    MAX(r.unit_price),
-    PERCENTILE_CONT(0.10) WITHIN GROUP (ORDER BY r.unit_price),
-    PERCENTILE_CONT(0.25) WITHIN GROUP (ORDER BY r.unit_price),
-    PERCENTILE_CONT(0.75) WITHIN GROUP (ORDER BY r.unit_price),
-    PERCENTILE_CONT(0.90) WITHIN GROUP (ORDER BY r.unit_price),
-    COUNT(DISTINCT r.arm_sku_name)
-FROM retail_prices_vm r
-JOIN vm_sku_catalog c ON r.arm_sku_name = c.sku_name
-WHERE r.pricing_type  = 'Consumption'
-  AND r.sku_name NOT LIKE '%% Spot%%'
-  AND r.unit_price > 0
-GROUP BY r.arm_region_name, r.currency_code;
-"""
-
-AGGREGATE_SPOT_BY_CATEGORY = """\
+AGGREGATE_SPOT = """\
 INSERT INTO price_summary (
     run_id, snapshot_utc, region, category, price_type, currency_code,
     avg_price, median_price, min_price, max_price,
@@ -125,45 +98,16 @@ JOIN vm_sku_catalog c ON r.arm_sku_name = c.sku_name
 WHERE r.pricing_type  = 'Consumption'
   AND r.sku_name LIKE '%% Spot%%'
   AND r.unit_price > 0
-GROUP BY r.arm_region_name, c.category, r.currency_code;
-"""
-
-AGGREGATE_SPOT_GLOBAL = """\
-INSERT INTO price_summary (
-    run_id, snapshot_utc, region, category, price_type, currency_code,
-    avg_price, median_price, min_price, max_price,
-    p10_price, p25_price, p75_price, p90_price, sku_count
-)
-SELECT
-    %(run_id)s,
-    NOW(),
-    r.arm_region_name,
-    NULL,
-    'spot',
-    r.currency_code,
-    AVG(r.unit_price),
-    PERCENTILE_CONT(0.5)  WITHIN GROUP (ORDER BY r.unit_price),
-    MIN(r.unit_price),
-    MAX(r.unit_price),
-    PERCENTILE_CONT(0.10) WITHIN GROUP (ORDER BY r.unit_price),
-    PERCENTILE_CONT(0.25) WITHIN GROUP (ORDER BY r.unit_price),
-    PERCENTILE_CONT(0.75) WITHIN GROUP (ORDER BY r.unit_price),
-    PERCENTILE_CONT(0.90) WITHIN GROUP (ORDER BY r.unit_price),
-    COUNT(DISTINCT r.arm_sku_name)
-FROM retail_prices_vm r
-JOIN vm_sku_catalog c ON r.arm_sku_name = c.sku_name
-WHERE r.pricing_type  = 'Consumption'
-  AND r.sku_name LIKE '%% Spot%%'
-  AND r.unit_price > 0
-GROUP BY r.arm_region_name, r.currency_code;
+GROUP BY GROUPING SETS (
+    (r.arm_region_name, c.category, r.currency_code),
+    (r.arm_region_name, r.currency_code)
+);
 """
 
 # Ordered list for sequential execution.
 AGGREGATION_QUERIES: list[tuple[str, str]] = [
-    ("retail_by_category", AGGREGATE_RETAIL_BY_CATEGORY),
-    ("retail_global", AGGREGATE_RETAIL_GLOBAL),
-    ("spot_by_category", AGGREGATE_SPOT_BY_CATEGORY),
-    ("spot_global", AGGREGATE_SPOT_GLOBAL),
+    ("retail", AGGREGATE_RETAIL),
+    ("spot", AGGREGATE_SPOT),
 ]
 
 # -- Job tracking (reuses job_runs table from ingestion) -----------------------

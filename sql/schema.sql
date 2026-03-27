@@ -83,6 +83,9 @@ CREATE INDEX IF NOT EXISTS idx_retail_vm_snapshot_sku
 CREATE INDEX IF NOT EXISTS idx_retail_vm_savings_snapshot
     ON retail_prices_vm (job_datetime, arm_region_name, arm_sku_name, sku_id)
     WHERE savings_plan IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_retail_vm_pricing_type_price
+    ON retail_prices_vm (pricing_type, unit_price)
+    WHERE unit_price > 0;
 
 -- ============================================================
 -- spot_eviction_rates: VM spot eviction rates from Resource Graph

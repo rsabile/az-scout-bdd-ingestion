@@ -110,7 +110,7 @@ variable "sku_mapper_cron" {
 variable "price_aggregator_cron" {
   description = "Cron expression for the price aggregator job (UTC). Should run after all currency pricing jobs."
   type        = string
-  default     = "0 5 * * *" # Daily at 05:00 UTC (all currency jobs finish by ~03:55)
+  default     = "0 7 * * *" # Daily at 07:00 UTC
 }
 
 # ---------------------------------------------------------------------

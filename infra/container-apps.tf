@@ -685,7 +685,7 @@ resource "azurerm_container_app_job" "price_aggregator" {
     identity_ids = [azurerm_user_assigned_identity.ingestion_jobs.id]
   }
 
-  replica_timeout_in_seconds = 1800
+  replica_timeout_in_seconds = 3600
   replica_retry_limit        = 3
 
   schedule_trigger_config {
@@ -698,8 +698,8 @@ resource "azurerm_container_app_job" "price_aggregator" {
     container {
       name   = "price-aggregator-job"
       image  = "${azurerm_container_registry.main.login_server}/price-aggregator-job:latest"
-      cpu    = 0.5
-      memory = "1Gi"
+      cpu    = 1
+      memory = "2Gi"
 
       env {
         name  = "PGHOST"
