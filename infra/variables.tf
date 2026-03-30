@@ -153,13 +153,13 @@ variable "currency_job_timeout" {
 variable "api_cpu" {
   description = "CPU cores for the API container (e.g. 0.25, 0.5, 1.0)"
   type        = number
-  default     = 0.5
+  default     = 1.0
 }
 
 variable "api_memory" {
   description = "Memory for the API container (e.g. 1Gi, 2Gi)"
   type        = string
-  default     = "1Gi"
+  default     = "2Gi"
 }
 
 variable "api_min_replicas" {

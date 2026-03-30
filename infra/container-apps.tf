@@ -609,8 +609,8 @@ resource "azurerm_container_app_job" "sku_mapper" {
     container {
       name   = "sku-mapper-job"
       image  = "${azurerm_container_registry.main.login_server}/sku-mapper-job:latest"
-      cpu    = 0.5
-      memory = "1Gi"
+      cpu    = 1.0
+      memory = "2Gi"
 
       env {
         name  = "PGHOST"

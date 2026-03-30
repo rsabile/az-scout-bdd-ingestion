@@ -14,6 +14,8 @@ from typing import Any
 
 import psycopg2  # type: ignore[import-untyped]
 import requests
+from psycopg2.extras import execute_values  # type: ignore[import-untyped]
+
 from core.base_collector import BaseCollector
 
 
@@ -219,72 +221,63 @@ class AzurePricingCollector(BaseCollector):
                 )
 
                 with pg_conn.cursor() as cur:
+                    rows = []
                     for item in items:
                         savings_plan = item.get("savingsPlan")
                         savings_plan_json = (
                             json.dumps(savings_plan) if savings_plan is not None else None
                         )
 
-                        params = {
-                            "jobId": item.get("jobId"),
-                            "jobDateTime": item.get("jobDateTime"),
-                            "jobType": item.get("jobType"),
-                            "currencyCode": item.get("currencyCode"),
-                            "tierMinimumUnits": item.get("tierMinimumUnits"),
-                            "retailPrice": item.get("retailPrice"),
-                            "unitPrice": item.get("unitPrice"),
-                            "armRegionName": item.get("armRegionName"),
-                            "location": item.get("location"),
-                            "effectiveStartDate": item.get("effectiveStartDate"),
-                            "meterId": item.get("meterId"),
-                            "meterName": item.get("meterName"),
-                            "productId": item.get("productId"),
-                            "skuId": item.get("skuId"),
-                            "productName": item.get("productName"),
-                            "skuName": item.get("skuName"),
-                            "serviceName": item.get("serviceName"),
-                            "serviceId": item.get("serviceId"),
-                            "serviceFamily": item.get("serviceFamily"),
-                            "unitOfMeasure": item.get("unitOfMeasure"),
-                            "type": item.get("type"),
-                            "isPrimaryMeterRegion": item.get("isPrimaryMeterRegion"),
-                            "armSkuName": item.get("armSkuName"),
-                            "reservationTerm": item.get("reservationTerm"),
-                            "savingsPlanJson": savings_plan_json,
-                        }
+                        rows.append((
+                            item.get("jobId"),
+                            item.get("jobDateTime"),
+                            item.get("jobType"),
+                            item.get("currencyCode"),
+                            item.get("tierMinimumUnits"),
+                            item.get("retailPrice"),
+                            item.get("unitPrice"),
+                            item.get("armRegionName"),
+                            item.get("location"),
+                            item.get("effectiveStartDate"),
+                            item.get("meterId"),
+                            item.get("meterName"),
+                            item.get("productId"),
+                            item.get("skuId"),
+                            item.get("productName"),
+                            item.get("skuName"),
+                            item.get("serviceName"),
+                            item.get("serviceId"),
+                            item.get("serviceFamily"),
+                            item.get("unitOfMeasure"),
+                            item.get("type"),
+                            item.get("isPrimaryMeterRegion"),
+                            item.get("armSkuName"),
+                            item.get("reservationTerm"),
+                            savings_plan_json,
+                        ))
 
-                        cur.execute(
-                            """
-                            INSERT INTO retail_prices_vm (
-                                job_id, job_datetime, job_type,
-                                currency_code, tier_minimum_units,
-                                retail_price, unit_price,
-                                arm_region_name, location,
-                                effective_start_date,
-                                meter_id, meter_name,
-                                product_id, sku_id, product_name, sku_name,
-                                service_name, service_id, service_family,
-                                unit_of_measure, pricing_type,
-                                is_primary_meter_region, arm_sku_name,
-                                reservation_term, savings_plan
-                            ) VALUES (
-                                %(jobId)s, %(jobDateTime)s, %(jobType)s,
-                                %(currencyCode)s, %(tierMinimumUnits)s,
-                                %(retailPrice)s, %(unitPrice)s,
-                                %(armRegionName)s, %(location)s,
-                                %(effectiveStartDate)s,
-                                %(meterId)s, %(meterName)s,
-                                %(productId)s, %(skuId)s, %(productName)s, %(skuName)s,
-                                %(serviceName)s, %(serviceId)s, %(serviceFamily)s,
-                                %(unitOfMeasure)s, %(type)s,
-                                %(isPrimaryMeterRegion)s, %(armSkuName)s,
-                                %(reservationTerm)s, %(savingsPlanJson)s
-                            )
-                            ON CONFLICT (currency_code, arm_region_name, sku_id, pricing_type, reservation_term, job_id)
-                            DO NOTHING
-                            """,
-                            params,
-                        )
+                    execute_values(
+                        cur,
+                        """
+                        INSERT INTO retail_prices_vm (
+                            job_id, job_datetime, job_type,
+                            currency_code, tier_minimum_units,
+                            retail_price, unit_price,
+                            arm_region_name, location,
+                            effective_start_date,
+                            meter_id, meter_name,
+                            product_id, sku_id, product_name, sku_name,
+                            service_name, service_id, service_family,
+                            unit_of_measure, pricing_type,
+                            is_primary_meter_region, arm_sku_name,
+                            reservation_term, savings_plan
+                        ) VALUES %s
+                        ON CONFLICT (currency_code, arm_region_name, sku_id, pricing_type, reservation_term, job_id)
+                        DO NOTHING
+                        """,
+                        rows,
+                        page_size=100,
+                    )
 
                 pg_conn.commit()
 
