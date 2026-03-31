@@ -187,6 +187,16 @@ resource "azurerm_container_app_job" "pricing_currency" {
       }
 
       env {
+        name  = "AZURE_PRICING_PAGE_DELAY"
+        value = var.pricing_page_delay
+      }
+
+      env {
+        name  = "AZURE_PRICING_BATCH_ACCUMULATE_SIZE"
+        value = var.pricing_batch_accumulate_size
+      }
+
+      env {
         name  = "ENABLE_AZURE_SPOT_COLLECTOR"
         value = "false"
       }
@@ -531,6 +541,16 @@ resource "azurerm_container_app_job" "ingestion_manual" {
       env {
         name  = "AZURE_PRICING_MAX_ITEMS"
         value = var.max_pricing_items
+      }
+
+      env {
+        name  = "AZURE_PRICING_PAGE_DELAY"
+        value = var.pricing_page_delay
+      }
+
+      env {
+        name  = "AZURE_PRICING_BATCH_ACCUMULATE_SIZE"
+        value = var.pricing_batch_accumulate_size
       }
 
       env {

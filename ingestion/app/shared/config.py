@@ -89,6 +89,10 @@ class ConfigManager:
             "azure_pricing_api_retry_attempts": os.getenv("AZURE_PRICING_API_RETRY_ATTEMPTS", "3"),
             "azure_pricing_api_retry_delay": os.getenv("AZURE_PRICING_API_RETRY_DELAY", "2.0"),
             "azure_pricing_filters": os.getenv("AZURE_PRICING_FILTERS", "{}"),
+            "azure_pricing_page_delay": os.getenv("AZURE_PRICING_PAGE_DELAY", "0.1"),
+            "azure_pricing_batch_accumulate_size": os.getenv(
+                "AZURE_PRICING_BATCH_ACCUMULATE_SIZE", "2000"
+            ),
             # Azure Spot Collector
             "enable_azure_spot_collector": os.getenv(
                 "ENABLE_AZURE_SPOT_COLLECTOR", "false"
@@ -132,6 +136,10 @@ class ConfigManager:
                     "api_retry_delay": self._config["azure_pricing_api_retry_delay"],
                     "max_items": self.get_int("azure_pricing_max_items", -1),
                     "filters_json": self.get_json("azure_pricing_filters", "{}"),
+                    "page_delay": self._config["azure_pricing_page_delay"],
+                    "batch_accumulate_size": self._config[
+                        "azure_pricing_batch_accumulate_size"
+                    ],
                 }
             )
         elif collector_name == "azure_spot":

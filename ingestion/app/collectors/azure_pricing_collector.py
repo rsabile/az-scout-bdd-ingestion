@@ -1,13 +1,16 @@
 """Azure Pricing Data Collector.
 
-Collects VM retail pricing from the Azure Retail Prices API
+Collects retail pricing from the Azure Retail Prices API
 (https://prices.azure.com/api/retail/prices) and ingests into PostgreSQL.
 
-Mirrors the collector pattern from az-pricing-history but stores data
-in a PostgreSQL table instead of Azure Data Explorer.
+Uses a prefetch-thread pipeline: one background thread fetches API pages
+while the main thread accumulates items and batch-inserts into PostgreSQL.
 """
 
 import json
+import logging
+import queue
+import threading
 import time
 from datetime import datetime
 from typing import Any
@@ -17,6 +20,9 @@ import requests
 from psycopg2.extras import execute_values  # type: ignore[import-untyped]
 
 from core.base_collector import BaseCollector
+
+# Sentinel signaling the fetcher thread has finished producing pages.
+_SENTINEL = object()
 
 
 class AzurePricingCollector(BaseCollector):
@@ -40,6 +46,12 @@ class AzurePricingCollector(BaseCollector):
         self.pg_retry_attempts = 5
         self.pg_retry_delay = 5  # seconds
 
+        # Courtesy delay between API pages (seconds)
+        self.page_delay = float(config.get("page_delay", 0.1))
+
+        # Accumulate items before flushing to PG
+        self.batch_accumulate_size = int(config.get("batch_accumulate_size", 2000))
+
         # Filters
         self.filters_json: str = config.get("filters_json", "{}")
 
@@ -48,10 +60,13 @@ class AzurePricingCollector(BaseCollector):
         self.max_items = float("inf") if max_cfg == -1 else max_cfg
 
         self.logger.info(
-            "AzurePricingCollector init – max_items=%s, retry=%d/%s",
+            "AzurePricingCollector init – max_items=%s, retry=%d/%s, "
+            "page_delay=%.2fs, batch_accumulate=%d",
             "unlimited" if self.max_items == float("inf") else self.max_items,
             self.api_retry_attempts,
             self.api_retry_delay,
+            self.page_delay,
+            self.batch_accumulate_size,
         )
 
     # ------------------------------------------------------------------
@@ -276,7 +291,7 @@ class AzurePricingCollector(BaseCollector):
                         DO NOTHING
                         """,
                         rows,
-                        page_size=100,
+                        page_size=1000,
                     )
 
                 pg_conn.commit()
@@ -327,76 +342,150 @@ class AzurePricingCollector(BaseCollector):
     # Main collection loop
     # ------------------------------------------------------------------
 
-    def collect_data(self, pg_conn: Any) -> int:
-        """Fetch pricing data page-by-page and ingest into PostgreSQL."""
-        total_items = 0
-        total_ingested = 0
+    def _fetcher_thread(
+        self,
+        page_queue: queue.Queue[Any],
+        filter_params: dict[str, str],
+    ) -> None:
+        """Background thread that fetches API pages and pushes them to *page_queue*.
 
-        self.logger.info("Starting real-time pricing data collection and ingestion")
-
-        filter_params = self.build_filter_params()
+        Produces ``(page_number, items_list)`` tuples.  On completion (or
+        error) it pushes the ``_SENTINEL`` so the consumer knows to stop.
+        """
+        logger = logging.getLogger(f"{__name__}.fetcher")
         next_page_link: str | None = self.api_url
         page_count = 0
 
+        # Each thread needs its own Session (requests.Session is not
+        # guaranteed thread-safe for *concurrent* use).
         session = requests.Session()
         session.timeout = 300  # 5 min
 
-        if filter_params:
-            self.logger.info("Starting collection from: %s with filters", self.api_url)
-        else:
-            self.logger.info("Starting collection from: %s (no filters)", self.api_url)
+        try:
+            while next_page_link:
+                page_count += 1
+                logger.debug("Fetcher – page %d", page_count)
 
-        while next_page_link and total_items < self.max_items:
-            page_count += 1
-            self.logger.info("Fetching page %d …", page_count)
+                if page_count == 1:
+                    data = self.make_api_request(session, next_page_link, filter_params)
+                else:
+                    data = self.make_api_request(session, next_page_link)
 
-            if page_count == 1:
-                data = self.make_api_request(session, next_page_link, filter_params)
-            else:
-                data = self.make_api_request(session, next_page_link)
+                items: list[dict[str, Any]] = data.get("Items", [])
+                if not items:
+                    logger.info("Fetcher – no more items after page %d", page_count)
+                    break
 
-            items: list[dict[str, Any]] = data.get("Items", [])
-            if not items:
-                self.logger.info("No more items – stopping pagination")
+                page_queue.put((page_count, items))
+
+                next_page_link = data.get("NextPageLink")
+                if next_page_link and self.page_delay > 0:
+                    time.sleep(self.page_delay)
+        except Exception:
+            logger.exception("Fetcher thread error on page %d", page_count)
+            raise
+
+    def collect_data(self, pg_conn: Any) -> int:
+        """Pipelined collection: prefetch API pages in a background thread
+        while the main thread accumulates and batch-inserts into PostgreSQL."""
+        total_items = 0
+        total_ingested = 0
+        batch_number = 0
+        buffer: list[dict[str, Any]] = []
+
+        self.logger.info("Starting pipelined pricing data collection and ingestion")
+
+        filter_params = self.build_filter_params()
+        page_queue: queue.Queue[Any] = queue.Queue(maxsize=5)
+
+        # Start fetcher in a daemon thread so it doesn't block shutdown.
+        fetcher_error: list[BaseException] = []
+
+        def _fetcher_wrapper() -> None:
+            try:
+                self._fetcher_thread(page_queue, filter_params)
+            except BaseException as exc:
+                fetcher_error.append(exc)
+            finally:
+                # Always place sentinel so the consumer unblocks.
+                try:
+                    page_queue.put(_SENTINEL)
+                except Exception:
+                    pass
+
+        thread = threading.Thread(target=_fetcher_wrapper, daemon=True)
+        thread.start()
+
+        # ---- consumer (main thread) ----
+        while True:
+            entry = page_queue.get()
+            if entry is _SENTINEL:
                 break
 
-            page_items: list[dict[str, Any]] = []
+            page_number, items = entry
+
             for item in items:
                 if total_items >= self.max_items:
                     self.logger.info("Reached max_items limit (%s)", self.max_items)
                     break
 
                 enriched = self.enrich_item(item)
-                page_items.append(enriched)
+                buffer.append(enriched)
                 total_items += 1
 
-            if page_items:
-                ok = self.ingest_batch_to_pg(pg_conn, page_items, f"page-{page_count}")
+            # Flush when buffer reaches accumulate threshold
+            if len(buffer) >= self.batch_accumulate_size:
+                batch_number += 1
+                ok = self.ingest_batch_to_pg(pg_conn, buffer, f"batch-{batch_number}")
                 if ok:
-                    total_ingested += len(page_items)
+                    total_ingested += len(buffer)
                     self.logger.info(
-                        "Page %d: ingested %d items (total: %d)",
-                        page_count,
-                        len(page_items),
+                        "Batch %d: ingested %d items (total: %d)",
+                        batch_number,
+                        len(buffer),
                         total_ingested,
                     )
                 else:
                     raise Exception(
-                        f"Failed to ingest page {page_count} ({len(page_items)} items)"
+                        f"Failed to ingest batch {batch_number} ({len(buffer)} items)"
                     )
-
-            page_items.clear()
+                buffer.clear()
 
             if total_items >= self.max_items:
                 break
 
-            next_page_link = data.get("NextPageLink")
+        # Flush remaining items
+        if buffer:
+            batch_number += 1
+            ok = self.ingest_batch_to_pg(pg_conn, buffer, f"batch-{batch_number}")
+            if ok:
+                total_ingested += len(buffer)
+                self.logger.info(
+                    "Final batch %d: ingested %d items (total: %d)",
+                    batch_number,
+                    len(buffer),
+                    total_ingested,
+                )
+            else:
+                raise Exception(
+                    f"Failed to ingest final batch {batch_number} ({len(buffer)} items)"
+                )
+            buffer.clear()
 
-            # Rate-limit courtesy delay
-            time.sleep(1)
+        # Wait for the fetcher thread to finish (should already be done).
+        thread.join(timeout=30)
+
+        if fetcher_error:
+            raise Exception(
+                f"Fetcher thread failed: {fetcher_error[0]}"
+            ) from fetcher_error[0]
 
         self.total_collected = total_items
         self.total_ingested = total_ingested
 
-        self.logger.info("Collection completed: %d items ingested", total_ingested)
+        self.logger.info(
+            "Collection completed: %d items ingested in %d batches",
+            total_ingested,
+            batch_number,
+        )
         return total_ingested

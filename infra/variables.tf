@@ -143,7 +143,19 @@ variable "currency_start_hour" {
 variable "currency_job_timeout" {
   description = "Replica timeout in seconds for each currency pricing job"
   type        = number
-  default     = 21600 # 6h
+  default     = 3600 # 1h
+}
+
+variable "pricing_page_delay" {
+  description = "Courtesy delay in seconds between API page fetches (pricing collector)"
+  type        = string
+  default     = "0.1"
+}
+
+variable "pricing_batch_accumulate_size" {
+  description = "Number of items to accumulate before flushing to PostgreSQL (pricing collector)"
+  type        = string
+  default     = "2000"
 }
 
 # ---------------------------------------------------------------------
